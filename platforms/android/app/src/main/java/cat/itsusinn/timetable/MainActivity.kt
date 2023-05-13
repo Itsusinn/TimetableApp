@@ -1,4 +1,4 @@
-package cat.itsusinn.timetableapp
+package cat.itsusinn.timetable
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity

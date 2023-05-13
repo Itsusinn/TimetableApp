@@ -4,15 +4,15 @@ plugins {
 }
 apply plugin: 'org.mozilla.rust-android-gradle.rust-android'
 cargo {
-    module = "../../../rust"       // Or whatever directory contains your Cargo.toml
-    libname = "timetable"          // Or whatever matches Cargo.toml's [package] name.
+    module = "../../../rust"
+    libname = "timetable"
     targets = ["arm64", "arm","x86_64", "x86"]
     profile = "release"
     rustupChannel = "nightly"
 }
 
 android {
-    namespace 'cat.itsusinn.timetableapp'
+    namespace 'cat.itsusinn.timetable'
     compileSdk 33
     ndkVersion "25.2.9519653"
 
@@ -26,7 +26,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "cat.itsusinn.timetableapp"
+        applicationId "cat.itsusinn.timetable"
         minSdk 24
         targetSdk 33
         versionCode 1
