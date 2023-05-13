@@ -1,6 +1,6 @@
 [tasks.uniffi]
 command = "cargo"
-args = ["run","--features=uniffi/cli","--bin","uniffi-bindgen","generate","src/math.udl","--language","kotlin","--out-dir","../platforms/android/app/src/main/java"]
+args = ["run","--features=uniffi/cli","--bin","uniffi-bindgen","generate","src/timetable.udl","--language","kotlin","--out-dir","../platforms/android/app/src/main/java"]
 
 [tasks.android]
 cwd = "../platforms/android"

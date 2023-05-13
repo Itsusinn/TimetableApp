@@ -1,3 +1,3 @@
 fn main() {
-    uniffi::generate_scaffolding("./src/math.udl").unwrap();
+    uniffi::generate_scaffolding("./src/timetable.udl").unwrap();
 }

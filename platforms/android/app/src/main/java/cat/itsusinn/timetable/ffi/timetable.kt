@@ -3,7 +3,7 @@
 
 @file:Suppress("NAME_SHADOWING")
 
-package uniffi.math;
+package cat.itsusinn.timetable.ffi
 
 // Common helper code.
 //
@@ -32,7 +32,9 @@ import java.nio.ByteOrder
 @Structure.FieldOrder("capacity", "len", "data")
 open class RustBuffer : Structure() {
     @JvmField var capacity: Int = 0
+
     @JvmField var len: Int = 0
+
     @JvmField var data: Pointer? = null
 
     class ByValue : RustBuffer(), Structure.ByValue
@@ -40,15 +42,15 @@ open class RustBuffer : Structure() {
 
     companion object {
         internal fun alloc(size: Int = 0) = rustCall() { status ->
-            _UniFFILib.INSTANCE.ffi_math_14e3_rustbuffer_alloc(size, status).also {
-                if(it.data == null) {
-                   throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=${size})")
-               }
+            _UniFFILib.INSTANCE.ffi_timetable_fbd7_rustbuffer_alloc(size, status).also {
+                if (it.data == null) {
+                    throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=$size)")
+                }
             }
         }
 
         internal fun free(buf: RustBuffer.ByValue) = rustCall() { status ->
-            _UniFFILib.INSTANCE.ffi_math_14e3_rustbuffer_free(buf, status)
+            _UniFFILib.INSTANCE.ffi_timetable_fbd7_rustbuffer_free(buf, status)
         }
     }
 
@@ -87,10 +89,12 @@ class RustBufferByReference : ByReference(16) {
 @Structure.FieldOrder("len", "data")
 open class ForeignBytes : Structure() {
     @JvmField var len: Int = 0
+
     @JvmField var data: Pointer? = null
 
     class ByValue : ForeignBytes(), Structure.ByValue
 }
+
 // The FfiConverter interface handles converter types to and from the FFI
 //
 // All implementing objects should be public to support external types.  When a
@@ -146,11 +150,11 @@ public interface FfiConverter<KotlinType, FfiType> {
     fun liftFromRustBuffer(rbuf: RustBuffer.ByValue): KotlinType {
         val byteBuf = rbuf.asByteBuffer()!!
         try {
-           val item = read(byteBuf)
-           if (byteBuf.hasRemaining()) {
-               throw RuntimeException("junk remaining in buffer after lifting, something is very wrong!!")
-           }
-           return item
+            val item = read(byteBuf)
+            if (byteBuf.hasRemaining()) {
+                throw RuntimeException("junk remaining in buffer after lifting, something is very wrong!!")
+            }
+            return item
         } finally {
             RustBuffer.free(rbuf)
         }
@@ -158,16 +162,18 @@ public interface FfiConverter<KotlinType, FfiType> {
 }
 
 // FfiConverter that uses `RustBuffer` as the FfiType
-public interface FfiConverterRustBuffer<KotlinType>: FfiConverter<KotlinType, RustBuffer.ByValue> {
+public interface FfiConverterRustBuffer<KotlinType> : FfiConverter<KotlinType, RustBuffer.ByValue> {
     override fun lift(value: RustBuffer.ByValue) = liftFromRustBuffer(value)
     override fun lower(value: KotlinType) = lowerIntoRustBuffer(value)
 }
+
 // A handful of classes and functions to support the generated data structures.
 // This would be a good candidate for isolating in its own ffi-support lib.
 // Error runtime.
 @Structure.FieldOrder("code", "error_buf")
 internal open class RustCallStatus : Structure() {
     @JvmField var code: Int = 0
+
     @JvmField var error_buf: RustBuffer.ByValue = RustBuffer.ByValue()
 
     fun isSuccess(): Boolean {
@@ -187,7 +193,7 @@ class InternalException(message: String) : Exception(message)
 
 // Each top-level error class has a companion object that can lift the error from the call status's rust buffer
 interface CallStatusErrorHandler<E> {
-    fun lift(error_buf: RustBuffer.ByValue): E;
+    fun lift(error_buf: RustBuffer.ByValue): E
 }
 
 // Helpers for calling Rust
@@ -195,8 +201,8 @@ interface CallStatusErrorHandler<E> {
 // synchronize itself
 
 // Call a rust function that returns a Result<>.  Pass in the Error class companion that corresponds to the Err
-private inline fun <U, E: Exception> rustCallWithError(errorHandler: CallStatusErrorHandler<E>, callback: (RustCallStatus) -> U): U {
-    var status = RustCallStatus();
+private inline fun <U, E : Exception> rustCallWithError(errorHandler: CallStatusErrorHandler<E>, callback: (RustCallStatus) -> U): U {
+    var status = RustCallStatus()
     val return_value = callback(status)
     if (status.isSuccess()) {
         return return_value
@@ -217,7 +223,7 @@ private inline fun <U, E: Exception> rustCallWithError(errorHandler: CallStatusE
 }
 
 // CallStatusErrorHandler implementation for times when we don't expect a CALL_ERROR
-object NullCallStatusErrorHandler: CallStatusErrorHandler<InternalException> {
+object NullCallStatusErrorHandler : CallStatusErrorHandler<InternalException> {
     override fun lift(error_buf: RustBuffer.ByValue): InternalException {
         RustBuffer.free(error_buf)
         return InternalException("Unexpected CALL_ERROR")
@@ -226,7 +232,7 @@ object NullCallStatusErrorHandler: CallStatusErrorHandler<InternalException> {
 
 // Call a rust function that returns a plain value
 private inline fun <U> rustCall(callback: (RustCallStatus) -> U): U {
-    return rustCallWithError(NullCallStatusErrorHandler, callback);
+    return rustCallWithError(NullCallStatusErrorHandler, callback)
 }
 
 // Contains loading, initialization code,
@@ -237,11 +243,11 @@ private fun findLibraryName(componentName: String): String {
     if (libOverride != null) {
         return libOverride
     }
-    return "uniffi_math"
+    return "timetable"
 }
 
 private inline fun <reified Lib : Library> loadIndirect(
-    componentName: String
+    componentName: String,
 ): Lib {
     return Native.load<Lib>(findLibraryName(componentName), Lib::class.java)
 }
@@ -252,58 +258,61 @@ private inline fun <reified Lib : Library> loadIndirect(
 internal interface _UniFFILib : Library {
     companion object {
         internal val INSTANCE: _UniFFILib by lazy {
-            loadIndirect<_UniFFILib>(componentName = "math")
-            
+            loadIndirect<_UniFFILib>(componentName = "timetable")
         }
     }
 
-    fun math_14e3_add(`a`: Int,`b`: Int,
-    _uniffi_out_err: RustCallStatus
+    fun timetable_fbd7_add(
+        `a`: Int,
+        `b`: Int,
+        _uniffi_out_err: RustCallStatus,
     ): Int
 
-    fun ffi_math_14e3_rustbuffer_alloc(`size`: Int,
-    _uniffi_out_err: RustCallStatus
+    fun ffi_timetable_fbd7_rustbuffer_alloc(
+        `size`: Int,
+        _uniffi_out_err: RustCallStatus,
     ): RustBuffer.ByValue
 
-    fun ffi_math_14e3_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,
-    _uniffi_out_err: RustCallStatus
+    fun ffi_timetable_fbd7_rustbuffer_from_bytes(
+        `bytes`: ForeignBytes.ByValue,
+        _uniffi_out_err: RustCallStatus,
     ): RustBuffer.ByValue
 
-    fun ffi_math_14e3_rustbuffer_free(`buf`: RustBuffer.ByValue,
-    _uniffi_out_err: RustCallStatus
+    fun ffi_timetable_fbd7_rustbuffer_free(
+        `buf`: RustBuffer.ByValue,
+        _uniffi_out_err: RustCallStatus,
     ): Unit
 
-    fun ffi_math_14e3_rustbuffer_reserve(`buf`: RustBuffer.ByValue,`additional`: Int,
-    _uniffi_out_err: RustCallStatus
+    fun ffi_timetable_fbd7_rustbuffer_reserve(
+        `buf`: RustBuffer.ByValue,
+        `additional`: Int,
+        _uniffi_out_err: RustCallStatus,
     ): RustBuffer.ByValue
-
-    
 }
 
 // Public interface members begin here.
 
-
-public object FfiConverterUInt: FfiConverter<UInt, Int> {
-    override fun lift(value: Int): UInt {
-        return value.toUInt()
+public object FfiConverterInt : FfiConverter<Int, Int> {
+    override fun lift(value: Int): Int {
+        return value
     }
 
-    override fun read(buf: ByteBuffer): UInt {
-        return lift(buf.getInt())
+    override fun read(buf: ByteBuffer): Int {
+        return buf.getInt()
     }
 
-    override fun lower(value: UInt): Int {
-        return value.toInt()
+    override fun lower(value: Int): Int {
+        return value
     }
 
-    override fun allocationSize(value: UInt) = 4
+    override fun allocationSize(value: Int) = 4
 
-    override fun write(value: UInt, buf: ByteBuffer) {
-        buf.putInt(value.toInt())
+    override fun write(value: Int, buf: ByteBuffer) {
+        buf.putInt(value)
     }
 }
 
-public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
+public object FfiConverterString : FfiConverter<String, RustBuffer.ByValue> {
     // Note: we don't inherit from FfiConverterRustBuffer, because we use a
     // special encoding when lowering/lifting.  We can use `RustBuffer.len` to
     // store our length and avoid writing it out to the buffer.
@@ -349,13 +358,10 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
     }
 }
 
-fun `add`(`a`: UInt, `b`: UInt): UInt {
-    return FfiConverterUInt.lift(
-    rustCall() { _status ->
-    _UniFFILib.INSTANCE.math_14e3_add(FfiConverterUInt.lower(`a`), FfiConverterUInt.lower(`b`), _status)
-})
+fun `add`(`a`: Int, `b`: Int): Int {
+    return FfiConverterInt.lift(
+        rustCall() { _status ->
+            _UniFFILib.INSTANCE.timetable_fbd7_add(FfiConverterInt.lower(`a`), FfiConverterInt.lower(`b`), _status)
+        },
+    )
 }
-
-
-
-
