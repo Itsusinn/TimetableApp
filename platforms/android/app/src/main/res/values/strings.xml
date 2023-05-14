@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">TimetableApp</string>
+    <string name="navigation_item_home">首页</string>
+    <string name="navigation_item_about">关于</string>
 </resources>
