@@ -42,7 +42,7 @@ open class RustBuffer : Structure() {
 
     companion object {
         internal fun alloc(size: Int = 0) = rustCall() { status ->
-            _UniFFILib.INSTANCE.ffi_timetable_fbd7_rustbuffer_alloc(size, status).also {
+            _UniFFILib.INSTANCE.ffi_timetable_929b_rustbuffer_alloc(size, status).also {
                 if (it.data == null) {
                     throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=$size)")
                 }
@@ -50,7 +50,7 @@ open class RustBuffer : Structure() {
         }
 
         internal fun free(buf: RustBuffer.ByValue) = rustCall() { status ->
-            _UniFFILib.INSTANCE.ffi_timetable_fbd7_rustbuffer_free(buf, status)
+            _UniFFILib.INSTANCE.ffi_timetable_929b_rustbuffer_free(buf, status)
         }
     }
 
@@ -262,28 +262,28 @@ internal interface _UniFFILib : Library {
         }
     }
 
-    fun timetable_fbd7_add(
+    fun timetable_929b_add(
         `a`: Int,
         `b`: Int,
         _uniffi_out_err: RustCallStatus,
     ): Int
 
-    fun ffi_timetable_fbd7_rustbuffer_alloc(
+    fun ffi_timetable_929b_rustbuffer_alloc(
         `size`: Int,
         _uniffi_out_err: RustCallStatus,
     ): RustBuffer.ByValue
 
-    fun ffi_timetable_fbd7_rustbuffer_from_bytes(
+    fun ffi_timetable_929b_rustbuffer_from_bytes(
         `bytes`: ForeignBytes.ByValue,
         _uniffi_out_err: RustCallStatus,
     ): RustBuffer.ByValue
 
-    fun ffi_timetable_fbd7_rustbuffer_free(
+    fun ffi_timetable_929b_rustbuffer_free(
         `buf`: RustBuffer.ByValue,
         _uniffi_out_err: RustCallStatus,
     ): Unit
 
-    fun ffi_timetable_fbd7_rustbuffer_reserve(
+    fun ffi_timetable_929b_rustbuffer_reserve(
         `buf`: RustBuffer.ByValue,
         `additional`: Int,
         _uniffi_out_err: RustCallStatus,
@@ -358,10 +358,46 @@ public object FfiConverterString : FfiConverter<String, RustBuffer.ByValue> {
     }
 }
 
+data class CourseDetail(
+    var `credit`: Int,
+    var `kind`: String,
+    var `name`: String,
+    var `time`: String,
+    var `place`: String,
+)
+
+public object FfiConverterTypeCourseDetail : FfiConverterRustBuffer<CourseDetail> {
+    override fun read(buf: ByteBuffer): CourseDetail {
+        return CourseDetail(
+            FfiConverterInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: CourseDetail) = (
+        FfiConverterInt.allocationSize(value.`credit`) +
+            FfiConverterString.allocationSize(value.`kind`) +
+            FfiConverterString.allocationSize(value.`name`) +
+            FfiConverterString.allocationSize(value.`time`) +
+            FfiConverterString.allocationSize(value.`place`)
+        )
+
+    override fun write(value: CourseDetail, buf: ByteBuffer) {
+        FfiConverterInt.write(value.`credit`, buf)
+        FfiConverterString.write(value.`kind`, buf)
+        FfiConverterString.write(value.`name`, buf)
+        FfiConverterString.write(value.`time`, buf)
+        FfiConverterString.write(value.`place`, buf)
+    }
+}
+
 fun `add`(`a`: Int, `b`: Int): Int {
     return FfiConverterInt.lift(
         rustCall() { _status ->
-            _UniFFILib.INSTANCE.timetable_fbd7_add(FfiConverterInt.lower(`a`), FfiConverterInt.lower(`b`), _status)
+            _UniFFILib.INSTANCE.timetable_929b_add(FfiConverterInt.lower(`a`), FfiConverterInt.lower(`b`), _status)
         },
     )
 }

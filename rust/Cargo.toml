@@ -8,13 +8,16 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [lib]
-crate-type = ["staticlib", "cdylib"]
+crate-type = [ "cdylib"]
 
 [dependencies]
 uniffi = { version = "0.23.0", features = [ "cli" ] }
-reqwest = { version = "0.11.17", features = [ "cookies" ]}
+reqwest = { version = "0.11.17", default-features = false,features = [ "cookies","rustls-tls" ]}
 tokio = {version = "1.28.1", features = [ "macros", "rt-multi-thread" ] }
 color-eyre = "0.6.2"
+tl = "0.7.7"
+serde_qs = "0.12.0"
+serde = { version = "1.0", features = ["derive"] }
 
 [build-dependencies]
 uniffi = { version = "0.23.0", features = [ "build" ] }

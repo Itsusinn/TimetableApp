@@ -1,3 +1,10 @@
 namespace timetable {
   i32 add(i32 a, i32 b);
 };
+dictionary CourseDetail {
+  i32 credit;
+  string kind;
+  string name;
+  string time;
+  string place;
+};
