@@ -17,13 +17,24 @@ package cat.itsusinn.timetable.ffi
 // compile the Rust component. The easiest way to ensure this is to bundle the Kotlin
 // helpers directly inline like we're doing here.
 
+import com.sun.jna.Callback
+import com.sun.jna.IntegerType
 import com.sun.jna.Library
 import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.Structure
-import com.sun.jna.ptr.ByReference
+import com.sun.jna.ptr.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
 // This is a helper for safely working with byte buffers returned from the Rust code.
 // A rust-owned buffer is represented by its capacity, its current length, and a
@@ -42,7 +53,7 @@ open class RustBuffer : Structure() {
 
     companion object {
         internal fun alloc(size: Int = 0) = rustCall() { status ->
-            _UniFFILib.INSTANCE.ffi_timetable_929b_rustbuffer_alloc(size, status).also {
+            _UniFFILib.INSTANCE.ffi_timetable_rustbuffer_alloc(size, status).also {
                 if (it.data == null) {
                     throw RuntimeException("RustBuffer.alloc() returned null data pointer (size=$size)")
                 }
@@ -50,7 +61,7 @@ open class RustBuffer : Structure() {
         }
 
         internal fun free(buf: RustBuffer.ByValue) = rustCall() { status ->
-            _UniFFILib.INSTANCE.ffi_timetable_929b_rustbuffer_free(buf, status)
+            _UniFFILib.INSTANCE.ffi_timetable_rustbuffer_free(buf, status)
         }
     }
 
@@ -77,6 +88,19 @@ class RustBufferByReference : ByReference(16) {
         pointer.setInt(0, value.capacity)
         pointer.setInt(4, value.len)
         pointer.setPointer(8, value.data)
+    }
+
+    /**
+     * Get a `RustBuffer.ByValue` from this reference.
+     */
+    fun getValue(): RustBuffer.ByValue {
+        val pointer = getPointer()
+        val value = RustBuffer.ByValue()
+        value.writeField("capacity", pointer.getInt(0))
+        value.writeField("len", pointer.getInt(4))
+        value.writeField("data", pointer.getPointer(8))
+
+        return value
     }
 }
 
@@ -172,20 +196,22 @@ public interface FfiConverterRustBuffer<KotlinType> : FfiConverter<KotlinType, R
 // Error runtime.
 @Structure.FieldOrder("code", "error_buf")
 internal open class RustCallStatus : Structure() {
-    @JvmField var code: Int = 0
+    @JvmField var code: Byte = 0
 
     @JvmField var error_buf: RustBuffer.ByValue = RustBuffer.ByValue()
 
+    class ByValue : RustCallStatus(), Structure.ByValue
+
     fun isSuccess(): Boolean {
-        return code == 0
+        return code == 0.toByte()
     }
 
     fun isError(): Boolean {
-        return code == 1
+        return code == 1.toByte()
     }
 
     fun isPanic(): Boolean {
-        return code == 2
+        return code == 2.toByte()
     }
 }
 
@@ -204,8 +230,14 @@ interface CallStatusErrorHandler<E> {
 private inline fun <U, E : Exception> rustCallWithError(errorHandler: CallStatusErrorHandler<E>, callback: (RustCallStatus) -> U): U {
     var status = RustCallStatus()
     val return_value = callback(status)
+    checkCallStatus(errorHandler, status)
+    return return_value
+}
+
+// Check RustCallStatus and throw an error if the call wasn't successful
+private fun<E : Exception> checkCallStatus(errorHandler: CallStatusErrorHandler<E>, status: RustCallStatus) {
     if (status.isSuccess()) {
-        return return_value
+        return
     } else if (status.isError()) {
         throw errorHandler.lift(status.error_buf)
     } else if (status.isPanic()) {
@@ -235,6 +267,86 @@ private inline fun <U> rustCall(callback: (RustCallStatus) -> U): U {
     return rustCallWithError(NullCallStatusErrorHandler, callback)
 }
 
+// IntegerType that matches Rust's `usize` / C's `size_t`
+public class USize(value: Long = 0) : IntegerType(Native.SIZE_T_SIZE, value, true) {
+    // This is needed to fill in the gaps of IntegerType's implementation of Number for Kotlin.
+    override fun toByte() = toInt().toByte()
+    override fun toChar() = toInt().toChar()
+    override fun toShort() = toInt().toShort()
+
+    fun writeToBuffer(buf: ByteBuffer) {
+        // Make sure we always write usize integers using native byte-order, since they may be
+        // casted to pointer values
+        buf.order(ByteOrder.nativeOrder())
+        try {
+            when (Native.SIZE_T_SIZE) {
+                4 -> buf.putInt(toInt())
+                8 -> buf.putLong(toLong())
+                else -> throw RuntimeException("Invalid SIZE_T_SIZE: ${Native.SIZE_T_SIZE}")
+            }
+        } finally {
+            buf.order(ByteOrder.BIG_ENDIAN)
+        }
+    }
+
+    companion object {
+        val size: Int
+            get() = Native.SIZE_T_SIZE
+
+        fun readFromBuffer(buf: ByteBuffer): USize {
+            // Make sure we always read usize integers using native byte-order, since they may be
+            // casted from pointer values
+            buf.order(ByteOrder.nativeOrder())
+            try {
+                return when (Native.SIZE_T_SIZE) {
+                    4 -> USize(buf.getInt().toLong())
+                    8 -> USize(buf.getLong())
+                    else -> throw RuntimeException("Invalid SIZE_T_SIZE: ${Native.SIZE_T_SIZE}")
+                }
+            } finally {
+                buf.order(ByteOrder.BIG_ENDIAN)
+            }
+        }
+    }
+}
+
+// Map handles to objects
+//
+// This is used when the Rust code expects an opaque pointer to represent some foreign object.
+// Normally we would pass a pointer to the object, but JNA doesn't support getting a pointer from an
+// object reference , nor does it support leaking a reference to Rust.
+//
+// Instead, this class maps USize values to objects so that we can pass a pointer-sized type to
+// Rust when it needs an opaque pointer.
+//
+// TODO: refactor callbacks to use this class
+internal class UniFfiHandleMap<T : Any> {
+    private val map = ConcurrentHashMap<USize, T>()
+
+    // Use AtomicInteger for our counter, since we may be on a 32-bit system.  4 billion possible
+    // values seems like enough. If somehow we generate 4 billion handles, then this will wrap
+    // around back to zero and we can assume the first handle generated will have been dropped by
+    // then.
+    private val counter = java.util.concurrent.atomic.AtomicInteger(0)
+
+    val size: Int
+        get() = map.size
+
+    fun insert(obj: T): USize {
+        val handle = USize(counter.getAndAdd(1).toLong())
+        map.put(handle, obj)
+        return handle
+    }
+
+    fun get(handle: USize): T? {
+        return map.get(handle)
+    }
+
+    fun remove(handle: USize) {
+        map.remove(handle)
+    }
+}
+
 // Contains loading, initialization code,
 // and the FFI Function declarations in a com.sun.jna.Library.
 @Synchronized
@@ -259,38 +371,89 @@ internal interface _UniFFILib : Library {
     companion object {
         internal val INSTANCE: _UniFFILib by lazy {
             loadIndirect<_UniFFILib>(componentName = "timetable")
+                .also { lib: _UniFFILib ->
+                    uniffiCheckContractApiVersion(lib)
+                    uniffiCheckApiChecksums(lib)
+                    FfiConverterForeignExecutor.register(lib)
+                }
         }
     }
 
-    fun timetable_929b_add(
-        `a`: Int,
-        `b`: Int,
+    fun uniffi_timetable_fn_func_init_logger(
         _uniffi_out_err: RustCallStatus,
-    ): Int
-
-    fun ffi_timetable_929b_rustbuffer_alloc(
+    ): Unit
+    fun uniffi_timetable_fn_func_get_data(
+        `uniffiExecutor`: USize,
+        `uniffiCallback`: UniFfiFutureCallbackRustBuffer,
+        `uniffiCallbackData`: USize,
+        _uniffi_out_err: RustCallStatus,
+    ): Unit
+    fun ffi_timetable_rustbuffer_alloc(
         `size`: Int,
         _uniffi_out_err: RustCallStatus,
     ): RustBuffer.ByValue
-
-    fun ffi_timetable_929b_rustbuffer_from_bytes(
+    fun ffi_timetable_rustbuffer_from_bytes(
         `bytes`: ForeignBytes.ByValue,
         _uniffi_out_err: RustCallStatus,
     ): RustBuffer.ByValue
-
-    fun ffi_timetable_929b_rustbuffer_free(
+    fun ffi_timetable_rustbuffer_free(
         `buf`: RustBuffer.ByValue,
         _uniffi_out_err: RustCallStatus,
     ): Unit
-
-    fun ffi_timetable_929b_rustbuffer_reserve(
+    fun ffi_timetable_rustbuffer_reserve(
         `buf`: RustBuffer.ByValue,
         `additional`: Int,
         _uniffi_out_err: RustCallStatus,
     ): RustBuffer.ByValue
+    fun uniffi_timetable_checksum_func_init_logger(): Short
+    fun uniffi_timetable_checksum_func_get_data(): Short
+    fun uniffi_foreign_executor_callback_set(
+        `callback`: UniFfiForeignExecutorCallback,
+    ): Unit
+    fun ffi_timetable_uniffi_contract_version(): Int
+}
+
+private fun uniffiCheckContractApiVersion(lib: _UniFFILib) {
+    // Get the bindings contract version from our ComponentInterface
+    val bindings_contract_version = 22
+    // Get the scaffolding contract version by calling the into the dylib
+    val scaffolding_contract_version = lib.ffi_timetable_uniffi_contract_version()
+    if (bindings_contract_version != scaffolding_contract_version) {
+        throw RuntimeException("UniFFI contract version mismatch: try cleaning and rebuilding your project")
+    }
+}
+
+@Suppress("UNUSED_PARAMETER")
+private fun uniffiCheckApiChecksums(lib: _UniFFILib) {
+    if (lib.uniffi_timetable_checksum_func_init_logger() != 38972.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_timetable_checksum_func_get_data() != 29766.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
 }
 
 // Public interface members begin here.
+
+public object FfiConverterUInt : FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
 
 public object FfiConverterInt : FfiConverter<Int, Int> {
     override fun lift(value: Int): Int {
@@ -358,11 +521,71 @@ public object FfiConverterString : FfiConverter<String, RustBuffer.ByValue> {
     }
 }
 
+// Callback function to execute a Rust task.  The Kotlin code schedules these in a coroutine then
+// invokes them.
+internal interface UniFfiRustTaskCallback : com.sun.jna.Callback {
+    fun invoke(rustTaskData: Pointer?)
+}
+
+object UniFfiForeignExecutorCallback : com.sun.jna.Callback {
+    internal fun invoke(handle: USize, delayMs: Int, rustTask: UniFfiRustTaskCallback?, rustTaskData: Pointer?) {
+        if (rustTask == null) {
+            FfiConverterForeignExecutor.drop(handle)
+        } else {
+            val coroutineScope = FfiConverterForeignExecutor.lift(handle)
+            coroutineScope.launch {
+                if (delayMs > 0) {
+                    delay(delayMs.toLong())
+                }
+                rustTask.invoke(rustTaskData)
+            }
+        }
+    }
+}
+
+public object FfiConverterForeignExecutor : FfiConverter<CoroutineScope, USize> {
+    internal val handleMap = UniFfiHandleMap<CoroutineScope>()
+
+    internal fun drop(handle: USize) {
+        handleMap.remove(handle)
+    }
+
+    internal fun register(lib: _UniFFILib) {
+        lib.uniffi_foreign_executor_callback_set(UniFfiForeignExecutorCallback)
+    }
+
+    // Number of live handles, exposed so we can test the memory management
+    public fun handleCount(): Int {
+        return handleMap.size
+    }
+
+    override fun allocationSize(value: CoroutineScope) = USize.size
+
+    override fun lift(value: USize): CoroutineScope {
+        return handleMap.get(value) ?: throw RuntimeException("unknown handle in FfiConverterForeignExecutor.lift")
+    }
+
+    override fun read(buf: ByteBuffer): CoroutineScope {
+        return lift(USize.readFromBuffer(buf))
+    }
+
+    override fun lower(value: CoroutineScope): USize {
+        return handleMap.insert(value)
+    }
+
+    override fun write(value: CoroutineScope, buf: ByteBuffer) {
+        lower(value).writeToBuffer(buf)
+    }
+}
+
 data class CourseDetail(
     var `credit`: Int,
     var `kind`: String,
     var `name`: String,
-    var `time`: String,
+    var `time1`: UInt,
+    var `time2`: UInt,
+    var `time3`: UInt,
+    var `time4`: UInt,
     var `place`: String,
 )
 
@@ -372,7 +595,10 @@ public object FfiConverterTypeCourseDetail : FfiConverterRustBuffer<CourseDetail
             FfiConverterInt.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
             FfiConverterString.read(buf),
         )
     }
@@ -381,7 +607,10 @@ public object FfiConverterTypeCourseDetail : FfiConverterRustBuffer<CourseDetail
         FfiConverterInt.allocationSize(value.`credit`) +
             FfiConverterString.allocationSize(value.`kind`) +
             FfiConverterString.allocationSize(value.`name`) +
-            FfiConverterString.allocationSize(value.`time`) +
+            FfiConverterUInt.allocationSize(value.`time1`) +
+            FfiConverterUInt.allocationSize(value.`time2`) +
+            FfiConverterUInt.allocationSize(value.`time3`) +
+            FfiConverterUInt.allocationSize(value.`time4`) +
             FfiConverterString.allocationSize(value.`place`)
         )
 
@@ -389,15 +618,108 @@ public object FfiConverterTypeCourseDetail : FfiConverterRustBuffer<CourseDetail
         FfiConverterInt.write(value.`credit`, buf)
         FfiConverterString.write(value.`kind`, buf)
         FfiConverterString.write(value.`name`, buf)
-        FfiConverterString.write(value.`time`, buf)
+        FfiConverterUInt.write(value.`time1`, buf)
+        FfiConverterUInt.write(value.`time2`, buf)
+        FfiConverterUInt.write(value.`time3`, buf)
+        FfiConverterUInt.write(value.`time4`, buf)
         FfiConverterString.write(value.`place`, buf)
     }
 }
 
-fun `add`(`a`: Int, `b`: Int): Int {
-    return FfiConverterInt.lift(
-        rustCall() { _status ->
-            _UniFFILib.INSTANCE.timetable_929b_add(FfiConverterInt.lower(`a`), FfiConverterInt.lower(`b`), _status)
-        },
-    )
+public object FfiConverterSequenceTypeCourseDetail : FfiConverterRustBuffer<List<CourseDetail>> {
+    override fun read(buf: ByteBuffer): List<CourseDetail> {
+        val len = buf.getInt()
+        return List<CourseDetail>(len) {
+            FfiConverterTypeCourseDetail.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<CourseDetail>): Int {
+        val sizeForLength = 4
+        val sizeForItems = value.map { FfiConverterTypeCourseDetail.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<CourseDetail>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.forEach {
+            FfiConverterTypeCourseDetail.write(it, buf)
+        }
+    }
+}
+// Async return type handlers
+
+// FFI type for callback handlers
+internal interface UniFfiFutureCallbackUInt8 : com.sun.jna.Callback {
+    // Note: callbackData is always 0.  We could pass Rust a pointer/usize to represent the
+    // continuation, but with JNA it's easier to just store it in the callback handler.
+    fun invoke(_callbackData: USize, returnValue: Byte, callStatus: RustCallStatus.ByValue)
+}
+internal interface UniFfiFutureCallbackRustBuffer : com.sun.jna.Callback {
+    // Note: callbackData is always 0.  We could pass Rust a pointer/usize to represent the
+    // continuation, but with JNA it's easier to just store it in the callback handler.
+    fun invoke(_callbackData: USize, returnValue: RustBuffer.ByValue, callStatus: RustCallStatus.ByValue)
+}
+
+// Callback handlers for an async call.  These are invoked by Rust when the future is ready.  They
+// lift the return value or error and resume the suspended function.
+
+internal class UniFfiFutureCallbackHandlerVoid(val continuation: Continuation<Unit>) :
+    UniFfiFutureCallbackUInt8 {
+    override fun invoke(_callbackData: USize, returnValue: Byte, callStatus: RustCallStatus.ByValue) {
+        try {
+            checkCallStatus(NullCallStatusErrorHandler, callStatus)
+            continuation.resume(Unit)
+        } catch (e: Throwable) {
+            continuation.resumeWithException(e)
+        }
+    }
+}
+
+internal class UniFfiFutureCallbackHandlerSequenceTypeCourseDetail(val continuation: Continuation<List<CourseDetail>>) :
+    UniFfiFutureCallbackRustBuffer {
+    override fun invoke(_callbackData: USize, returnValue: RustBuffer.ByValue, callStatus: RustCallStatus.ByValue) {
+        try {
+            checkCallStatus(NullCallStatusErrorHandler, callStatus)
+            continuation.resume(FfiConverterSequenceTypeCourseDetail.lift(returnValue))
+        } catch (e: Throwable) {
+            continuation.resumeWithException(e)
+        }
+    }
+}
+
+fun `initLogger`() =
+
+    rustCall() { _status ->
+        _UniFFILib.INSTANCE.uniffi_timetable_fn_func_init_logger(_status)
+    }
+
+@Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+suspend fun `getData`(): List<CourseDetail> {
+    // Create a new `CoroutineScope` for this operation, suspend the coroutine, and call the
+    // scaffolding function, passing it one of the callback handlers from `AsyncTypes.kt`.
+    //
+    // Make sure to retain a reference to the callback handler to ensure that it's not GCed before
+    // it's invoked
+    var callbackHolder: UniFfiFutureCallbackHandlerSequenceTypeCourseDetail? = null
+    return coroutineScope {
+        val scope = this
+        return@coroutineScope suspendCoroutine { continuation ->
+            try {
+                val callback = UniFfiFutureCallbackHandlerSequenceTypeCourseDetail(continuation)
+                callbackHolder = callback
+                rustCall { status ->
+                    _UniFFILib.INSTANCE.uniffi_timetable_fn_func_get_data(
+
+                        FfiConverterForeignExecutor.lower(scope),
+                        callback,
+                        USize(0),
+                        status,
+                    )
+                }
+            } catch (e: Exception) {
+                continuation.resumeWithException(e)
+            }
+        }
+    }
 }

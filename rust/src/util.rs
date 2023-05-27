@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use color_eyre::{eyre, eyre::Result};
 
+use crate::{Course, CourseDetail};
 
 pub fn encode_inp(input: &str) -> Result<String> {
   let mut output = String::new();
@@ -44,18 +47,14 @@ pub fn encode_inp(input: &str) -> Result<String> {
   Ok(output)
 }
 
-#[tokio::test]
-pub async fn test() -> Result<()> {
-  use crate::{Course, CourseDetail};
-  use std::collections::HashMap;
-
-  std::env::set_var("HTTP_PROXY", "http://127.0.0.1:8080");
+pub async fn test() -> Result<Vec<CourseDetail>> {
+  // std::env::set_var("HTTP_PROXY", "http://127.0.0.1:8080");
   let base_url = "http://jwxt.wit.edu.cn/jsxsd/";
   let client = reqwest::ClientBuilder::new().cookie_store(true).build()?;
   client.get(base_url).send().await?;
 
-  let account = "2006******";
-  let password = "*********";
+  let account = "200******";
+  let password = "**********";
 
   let encoded = format!("{}%%%{}", encode_inp(account)?, encode_inp(password)?);
   let mut params = HashMap::new();
@@ -107,8 +106,7 @@ pub async fn test() -> Result<()> {
         })
     })
     .flatten()
-    .map(|course|course.into())
+    .map(|course| course.try_into().unwrap())
     .collect();
-  println!("{:#?}", courses);
-  Ok(())
+  Ok(courses)
 }

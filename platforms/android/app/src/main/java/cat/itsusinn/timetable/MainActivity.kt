@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
+import cat.itsusinn.timetable.ffi.initLogger
 import cat.itsusinn.timetable.ui.about.AboutScreen
 import cat.itsusinn.timetable.ui.home.HomeScreen
 import com.mikepenz.iconics.compose.Image
@@ -30,6 +31,7 @@ import com.mikepenz.iconics.typeface.library.fontawesome.FontAwesome
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        initLogger()
         super.onCreate(savedInstanceState)
         setContent {
             MainAppContent()

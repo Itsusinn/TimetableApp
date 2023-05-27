@@ -1,5 +1,5 @@
 [package]
-name = "timetable-app"
+name = "timetable"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,16 +8,21 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [lib]
-crate-type = [ "cdylib"]
+name = "timetable"
+crate-type = ["cdylib"]
 
 [dependencies]
-uniffi = { version = "0.23.0", features = [ "cli" ] }
-reqwest = { version = "0.11.17", default-features = false,features = [ "cookies","rustls-tls" ]}
-tokio = {version = "1.28.1", features = [ "macros", "rt-multi-thread" ] }
+uniffi = { path = "deps/uniffi-rs/uniffi", features = [ "cli","tokio"] }
+reqwest = { version = "0.11.17", default-features = false, features = [ "cookies", "rustls-tls" ] }
+tokio = { version = "1.28.1", features = [ "macros", "rt-multi-thread" ] }
 color-eyre = "0.6.2"
 tl = "0.7.7"
 serde_qs = "0.12.0"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = [ "derive" ] }
+android_logger = "0.13.1"
+log = "0.4.17"
+
+lateinit = { git = "https://github.com/Itsusinn/lateinit-rs" }
 
 [build-dependencies]
-uniffi = { version = "0.23.0", features = [ "build" ] }
+uniffi = { path = "deps/uniffi-rs/uniffi", features = [ "build" ] }
